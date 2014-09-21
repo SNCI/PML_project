@@ -1,0 +1,151 @@
+---
+title: "Practical Machine Learning Project"
+date: "Friday, September 19, 2014"
+output: html_document
+---
+
+##Introduction
+
+We will examine the data sets provided by Human Activity Recognition (HAR) research project (http://groupware.les.inf.puc-rio.br/har) to classify how well a participant in the research performs a specific activity, in this case lifting of a dumb bell.  This research is interesting in that it differs from prevalent  HAR research into classifying what activity a human subject performs rather than how well the subject performs a known activity.  Data is collected from 3 types of sensors (Gyroscope, Accelerometer, and Magnetometer) strapped on four locations including an arm, belt and a forearm of the human subject, in addition to the dumbbell itself.  In the given training data set (pml-training.csv), we have 19,622 observations from 6 human subjects with 157 sensory data points plus names of the subjects, the classification of how well the activity was performed (5 classes), and an index.  In total, there are 160 columns in the data set.  We are also given a testing set (pml-testing.csv) consisting of 20 observations with identical 160 columns – with the exception of the last column being “problem_id” instead of “classe”.  We are to apply the machine learning model developed in this project on the testing set to predict performance class for each observation and submit the projections in 20 separate files.
+
+##Overall Project Strategy
+
+We will first look at few representative data points to get a feel for what potential predictive capability each might have.  We will remove/ignore sensory data points containing many NA’s.   We will try out Random Forest algorithm to see how well it works via the caret package.  As a comparative analysis of algorithm performance, we will also apply Generalized Boosted Regression Model (GBM) and support Vector Machine (SVM).
+
+We expect the out of sample error to be near less than 1% in terms of accuracy.  In the best performing model, cross validation achieved over 99.4% and final prediction on out of sample data achieved 100%. Details on error estimates can be seen in the output from confusionMatrix function in the caret package for each models investigated.
+
+##Exploratory Data Analysis
+
+We first load the data sets:
+
+```{r cache=TRUE}
+#Clear working space in RStudio
+rm(list = ls(all = TRUE))
+#load the caret package
+library(caret)
+#reading the provided training data set and final testing set
+originalTraining <- read.csv("pml-training.csv",header=T)
+originalTesting <- read.csv("pml-testing.csv",header=T)
+#Check number of levels in the factor variable classe
+(levels(originalTraining $classe))
+#capture the outcome we are to predict in a separate variable
+classCol <- originalTraining $classe
+#capture number of human subjects, users, in a variable
+(users <- levels(originalTraining$user_name))
+```
+
+Let’s take a look at a few sensory data points:
+
+```{r fig.width=16, fig.height=8, cache=TRUE}
+library(ggplot2)
+ggplot(originalTraining, aes(x=user_name,y=accel_belt_x,color=classe))+geom_point(position=position_jitter(width=.5),alpha=.3)
+ggplot(originalTraining, aes(x=user_name,y=yaw_arm,color=classe))+geom_point(position=position_jitter(width=.5),alpha=.3)
+ggplot(originalTraining, aes(x=user_name,y=accel_arm_x,color=classe))+geom_point(position=position_jitter(width=.5),alpha=.3)
+ggplot(originalTraining, aes(x=user_name,y=gyros_arm_x,color=classe))+geom_point(position=position_jitter(width=.5),alpha=.3)
+```
+
+We will focus on predictors representing sensors, directions, angles and locations and ignore predictors with lots of NAs.
+
+```{r cache=TRUE}
+#Columns used for prediction
+
+sensors <- c("gyros","accel","magnet")
+directions <- c("x","y","z")
+angles <- c("roll","pitch","yaw")
+locations <- c("belt","arm","dumbbell","forearm")
+#Isolate all predictors with permutations of sensors, directions, and locations
+XYZs <- sort( apply( X = expand.grid(sensors,locations,directions) , MARGIN = 1, FUN = function(s) paste(s,collapse="_") ) )
+RPYs <- sort( apply( X = expand.grid(angles,locations) , MARGIN = 1, FUN = function(s) paste(s,collapse="_") ) ) 
+(inCols <- c("user_name", XYZs, RPYs, "classe"))
+inTraining<-as.data.frame(originalTraining[,inCols])
+```
+
+We now have a training set with 50 columns, from which we will split into training, validation and testing partitions using caret with 60%, 20%, 20% proportions respectively.
+
+```{r cache=TRUE}
+set.seed(12345)
+indexTrain <- createDataPartition(y= inTraining $classe,p=0.6,list=FALSE)
+trainingSet<-inTraining[indexTrain,]
+restT<-inTraining[-indexTrain,]
+indexV<- createDataPartition(y= restT $classe,p=0.5,list=FALSE)
+validationSet<-restT[indexV,]
+testingSet<-restT[-indexV,]
+dim(trainingSet); dim(validationSet); dim(testingSet);
+```
+
+##Training and Predicting
+
+We proceed to fit a model using Random Forest via caret package and use the validation data set to see how well it performed:
+```{r cache=TRUE , warning =FALSE}
+set.seed(122333)
+fitRF <- train(classe~.,method="rf",data=trainingSet)
+predictValRF <- predict(fitRF,validationSet)
+confusionMatrix(predictValRF,validationSet$classe)
+```
+
+We achieved a prediction accuracy of 99.4% with the validation set.  We would expect the out-of sample errors while predicting on testing set  to be close to what we achieved with validation set:
+
+```{r cache=TRUE , warning =FALSE}
+predictRF <- predict(fitRF,testingSet)
+confusionMatrix(predictRF,testingSet$classe)
+```
+
+The performance on out of sample testing test is slightly below that on validation set, with an accuracy of 99.1%.  Certainly, we could strive for something close to 100% but could risk over-fitting.  Nevertheless, as a comparative analysis, we will proceed to apply Support Vector Machine (SVM) with Radial Basis kernel and Generalized Boosted Regression Model (GBM).
+
+###Try Support Vector Machine:
+
+```{r warning =FALSE}
+set.seed(222333)
+fitSVM <- train(classe~.,method="svmRadial",data=trainingSet)
+predictValSVM <- predict(fitSVM,validationSet)
+confusionMatrix(predictValSVM,validationSet$classe)
+
+predictSVM <- predict(fitSVM,testingSet)
+confusionMatrix(predictSVM,testingSet$classe)
+```
+
+SVM produced an accuracy of 91.6% on validation data set and 92% on testing set - underperforms Random Forest.
+
+###We now try GBM:
+
+```{r cache=TRUE , warning =FALSE}
+set.seed(322333)
+fitGBM <- train(classe~.,method="gbm", data=trainingSet, verbose = FALSE)
+predictValGBM <- predict(fitGBM,validationSet)
+confusionMatrix(predictValGBM,validationSet$classe)
+
+predictGBM <- predict(fitGBM,testingSet)
+confusionMatrix(predictGBM,testingSet$classe)
+```
+
+GBM produced an accuracy of 96.5% on validation data set and 95.9% on testing set.
+
+Random Forest outperformed both GBM and SMV models for this specific set of predictors we have chosen.  Their respective performance might differ if a different set of predictors were used.  
+
+As such, to predict the outcome (classe) in the given testing set, we will use fitted Random Forest model.
+
+```{r cache=TRUE, warning =FALSE}
+inColsTest <- c("user_name", XYZs, RPYs)
+inTesting<-as.data.frame(originalTesting[,inColsTest])
+predictTestRF<-predict(fitRF,inTesting)
+(answers<-as.character(predictTestRF))
+```
+
+Finally, we will write out the twenty predictions to individual files:
+
+```{r cache=TRUE, warning =FALSE}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(answers)
+```
+
+The prediction on the provided out of sample test data set achieved 100% accuracy after the answers were submitted.
+
+##Conclusion
+
+We used sensory data collected from six human subjects while lifting dumb bells to predict how well they performed the task of weight lifting the dumb bell.  Specifically, we chose only the 49 relevant data points on sensors, directions, angles, and locations in addition to subjects’ names as predictors in the models.  Amongst the machine learning algorithms we applied, Random Forest outperformed Support Vector Machine and Generalized Boosted Regression Model. We could have tried model ensemble approach to see if predictive power could have been increased.  But with an accuracy of over 99% achieved by Random Forest, we reasoned that any additional accuracy might risk over-fitting thus lose the power of generalization on other out of sample data sets.
